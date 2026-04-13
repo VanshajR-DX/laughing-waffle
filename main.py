@@ -67,3 +67,11 @@ def capture_lead(payload: LeadIn) -> dict:
     print("=====================\n")
 
     return {"status": "captured"}
+
+@app.get("/leads")
+def get_leads():
+    try:
+        with open("data/leads.json", "r") as f:
+            return json.load(f)
+    except:
+        return []
