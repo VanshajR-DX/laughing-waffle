@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 
-from utils import extract_and_clean_fields, safe_append_json_record
+from utils import extract_and_clean_fields, load_json_array, safe_append_json_record
 
 app = FastAPI(title="ElevenLabs Post-Call Webhook POC", version="1.0.0")
 
@@ -15,6 +15,15 @@ OUTPUT_FILE = Path("data.json")
 @app.get("/")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/records")
+def get_records() -> list[dict]:
+    try:
+        return load_json_array(OUTPUT_FILE)
+    except Exception as error:
+        print(f"WARNING: failed to read records: {error}")
+        return []
 
 
 @app.post("/webhook")
