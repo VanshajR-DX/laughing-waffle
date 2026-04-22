@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "lead_id": "117f4d26-6c34-4b04-807a-35e4e5125ede",
+    "name": "Test Visitor",
+    "phone": "5557771234",
+    "interest": "General membership",
+    "delete_requested": false,
+    "created_at": "2026-04-17T08:14:45.434232+00:00",
+    "updated_at": "2026-04-17T08:14:45.451523+00:00",
+    "visit": {
+      "requested": true,
+      "day": "Saturday",
+      "time": "09:30"
+    }
+  }
+]
