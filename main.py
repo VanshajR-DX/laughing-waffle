@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from typing import Any, List, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from utils import extract_and_clean_fields, load_json_array, safe_append_json_record
@@ -24,6 +26,22 @@ DATA_DIR = Path("data")
 LEADS_FILE = DATA_DIR / "leads.json"
 file_lock = Lock()
 in_memory_leads: List[dict] = []
+
+logger = logging.getLogger("elevenlabs_backend")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(DATA_DIR / "backend.log", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+logger.propagate = False
 
 
 # Pydantic models for lead operations
@@ -41,6 +59,17 @@ class LeadDeleteRequest(BaseModel):
 # Helper functions
 def generate_uuid() -> str:
     return str(uuid4())
+
+
+def log_warning(message: str) -> None:
+    logger.warning(message)
+
+
+def log_error(message: str, error: Exception | None = None) -> None:
+    if error is None:
+        logger.error(message)
+    else:
+        logger.error(message, exc_info=error)
 
 
 def normalize_phone(phone: str) -> str:
@@ -306,7 +335,7 @@ def startup() -> None:
     try:
         loaded_leads = safe_read_json()
     except ValueError as error:
-        print(f"WARNING: {error}. Starting with empty in-memory leads.")
+        log_error(f"Failed to load leads during startup: {error}", error)
         loaded_leads = []
         safe_write_json()
     
@@ -394,6 +423,7 @@ def get_lead(phone: str) -> dict:
     with file_lock:
         lead = find_lead_by_phone(phone)
         if lead is None:
+            log_warning(f"Lead lookup failed: phone={phone}")
             raise HTTPException(status_code=404, detail={"error": "lead not found"})
         return lead
 
@@ -404,9 +434,11 @@ async def book_visit(request: Request) -> dict:
     try:
         payload = await request.json()
     except Exception:
+        log_warning("Visit booking rejected: request body was not valid JSON")
         raise HTTPException(status_code=422, detail={"error": "request body must be valid JSON"})
 
     if not isinstance(payload, dict):
+        log_warning("Visit booking rejected: request body was not a JSON object")
         raise HTTPException(status_code=422, detail={"error": "request body must be a JSON object"})
 
     def pick_value(*keys: str) -> str:
@@ -426,10 +458,14 @@ async def book_visit(request: Request) -> dict:
     time_str = pick_value("time", "visit_time", "appointment_time")
 
     # Resolve phone with fallback to caller_id
-    phone = get_phone_or_fallback(phone, caller_id)
-    day = _require_non_empty(day, "day")
-    location = _require_non_empty(location, "location")
-    time_str = _require_non_empty(time_str, "time")
+    try:
+        phone = get_phone_or_fallback(phone, caller_id)
+        day = _require_non_empty(day, "day")
+        location = _require_non_empty(location, "location")
+        time_str = _require_non_empty(time_str, "time")
+    except HTTPException as error:
+        log_warning(f"Visit booking validation failed: payload={payload} detail={error.detail}")
+        raise
     
     # Log incoming payload
     print(f"\n=== VISIT BOOKING REQUEST ===")
@@ -439,6 +475,7 @@ async def book_visit(request: Request) -> dict:
 
     # Validate time and normalize it.
     if not is_valid_visit_time(time_str):
+        log_warning(f"Visit booking rejected: invalid time='{time_str}' payload={payload}")
         raise HTTPException(
             status_code=422,
             detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
@@ -450,7 +487,7 @@ async def book_visit(request: Request) -> dict:
     with file_lock:
         lead = find_lead_by_phone(phone)
         if lead is None:
-            print(f"ERROR: Lead not found for phone {phone}")
+            log_warning(f"Visit booking failed: lead not found for phone={phone} payload={payload}")
             raise HTTPException(status_code=404, detail={"error": "lead not found"})
         
         if "visit" not in lead or not isinstance(lead["visit"], dict):
@@ -509,6 +546,7 @@ def flag_lead_for_deletion(payload: LeadDeleteRequest) -> dict:
     with file_lock:
         lead = find_lead_by_phone(phone)
         if lead is None:
+            log_warning(f"Delete requested for missing lead: phone={phone}")
             raise HTTPException(status_code=404, detail={"error": "lead not found"})
         
         lead["delete_requested"] = True
@@ -526,7 +564,7 @@ def get_records() -> list[dict]:
     try:
         return load_json_array(OUTPUT_FILE)
     except Exception as error:
-        print(f"WARNING: failed to read records: {error}")
+        log_error(f"Failed to read webhook records from {OUTPUT_FILE}: {error}", error)
         return []
 
 
@@ -538,36 +576,46 @@ async def webhook(request: Request) -> dict:
     try:
         payload = await request.json()
         if not isinstance(payload, dict):
-            print("WARNING: webhook payload is not a JSON object")
+            log_warning("Webhook payload is not a JSON object")
             payload = {}
     except Exception as error:
-        print(f"WARNING: invalid JSON payload: {error}")
+        log_warning(f"Webhook received invalid JSON payload: {error}")
 
-    print("\\n=== INCOMING WEBHOOK PAYLOAD ===")
+    logger.info("Incoming webhook payload received")
     try:
-        print(json.dumps(payload, indent=2, ensure_ascii=True))
+        logger.info(json.dumps(payload, indent=2, ensure_ascii=True))
     except Exception:
-        print(str(payload))
-    print("================================\\n")
+        logger.info(str(payload))
 
     parsed_data = extract_and_clean_fields(payload)
 
-    print("\\n=== PARSED DATA ===")
-    print(json.dumps(parsed_data, indent=2, ensure_ascii=True))
-    print("===================\\n")
+    logger.info("Parsed webhook data: %s", json.dumps(parsed_data, indent=2, ensure_ascii=True))
 
     should_skip = parsed_data.get("name") is None and parsed_data.get("phone") is None
     if should_skip:
-        print("INFO: skipping storage because both name and phone are null")
+        log_warning("Skipping webhook storage because both name and phone are null")
     else:
         try:
             safe_append_json_record(OUTPUT_FILE, parsed_data)
         except Exception as error:
-            print(f"WARNING: failed to store webhook record: {error}")
+            log_error(f"Failed to store webhook record: {error}", error)
 
-    print("\\n=== FINAL STORED OBJECT ===")
-    print(json.dumps(parsed_data, indent=2, ensure_ascii=True))
-    print("===========================\\n")
+    logger.info("Final stored webhook object: %s", json.dumps(parsed_data, indent=2, ensure_ascii=True))
 
     return {"status": "ok"}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    if exc.status_code >= 500:
+        logger.error("HTTP %s %s failed: %s", request.method, request.url.path, exc.detail)
+    else:
+        logger.warning("HTTP %s %s failed: %s", request.method, request.url.path, exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    log_error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc)
+    return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
