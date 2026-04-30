@@ -34,14 +34,6 @@ class LeadUpsert(BaseModel):
     caller_id: Optional[str] = Field(default=None, description="Fallback phone if phone not provided")
 
 
-class VisitRequest(BaseModel):
-    phone: Optional[str] = Field(default=None)
-    caller_id: Optional[str] = Field(default=None, description="Fallback phone if phone not provided")
-    day: str = Field(..., min_length=1)
-    time: str = Field(..., min_length=1)
-    location: str = Field(..., min_length=1, description="Gym location or class name")
-
-
 class LeadDeleteRequest(BaseModel):
     phone: str = Field(..., min_length=1)
 
@@ -407,35 +399,53 @@ def get_lead(phone: str) -> dict:
 
 
 @app.post("/visit")
-def book_visit(payload: VisitRequest) -> dict:
-    """Book a visit for an existing lead with location and time validation."""
+async def book_visit(request: Request) -> dict:
+    """Book a visit from raw JSON and normalize the fields internally."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail={"error": "request body must be valid JSON"})
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail={"error": "request body must be a JSON object"})
+
+    def pick_value(*keys: str) -> str:
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    phone = pick_value("phone", "caller_id", "caller", "number")
+    caller_id = payload.get("caller_id")
+    day = pick_value("day", "visit_day", "date")
+    location = pick_value("location", "preferred_location", "branch", "studio")
+    time_str = pick_value("time", "visit_time", "appointment_time")
+
     # Resolve phone with fallback to caller_id
-    phone = get_phone_or_fallback(payload.phone, payload.caller_id)
-    day = _require_non_empty(payload.day, "day")
-    location = _require_non_empty(payload.location, "location")
-    time_str = payload.time.strip()
+    phone = get_phone_or_fallback(phone, caller_id)
     
     # Log incoming payload
     print(f"\n=== VISIT BOOKING REQUEST ===")
-    print(f"Incoming: phone={payload.phone}, caller_id={payload.caller_id}")
+    print(f"Incoming payload: {payload}")
     print(f"Resolved phone: {phone}")
     print(f"Day: {day}, Location: {location}, Time: {time_str}")
-    
-    # Validate time is non-empty
-    if not time_str:
-        raise HTTPException(status_code=422, detail={"error": "time must be non-empty"})
-    
-    # Validate time falls within gym hours
-    if not is_valid_visit_time(time_str):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
-        )
-    
-    # Convert time to 24-hour format
-    time_24h = convert_to_24h(time_str)
-    
-    print(f"Time validation passed. Original: {time_str}, 24h: {time_24h}")
+
+    time_24h = ""
+    if time_str:
+        # Validate time only when the caller actually sent one.
+        if not is_valid_visit_time(time_str):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
+            )
+
+        # Convert time to 24-hour format
+        time_24h = convert_to_24h(time_str)
+        print(f"Time validation passed. Original: {time_str}, 24h: {time_24h}")
     
     with file_lock:
         lead = find_lead_by_phone(phone)
