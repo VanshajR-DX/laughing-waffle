@@ -10,7 +10,42 @@
     "visit": {
       "requested": true,
       "day": "Saturday",
-      "time": "09:30"
+      "location": "",
+      "time_spoken": "09:30",
+      "time_24h": "09:30"
+    }
+  },
+  {
+    "lead_id": "f62a701b-3214-4c95-8fa4-71ec7317234c",
+    "name": "Sarah Miller",
+    "phone": "5559876543",
+    "interest": "Yoga",
+    "delete_requested": false,
+    "created_at": "2026-04-30T09:24:32.030940+00:00",
+    "updated_at": "2026-04-30T09:24:32.082960+00:00",
+    "visit": {
+      "requested": true,
+      "day": "Wednesday",
+      "location": "Downtown Studio",
+      "time_spoken": "7:30 PM",
+      "time_24h": "19:30",
+      "created_at": "2026-04-30T09:24:32.082951+00:00"
+    }
+  },
+  {
+    "lead_id": "e5a552f9-418a-4df2-a364-4082de843146",
+    "name": "Mike Johnson",
+    "phone": "5555552222",
+    "interest": "Personal Training",
+    "delete_requested": false,
+    "created_at": "2026-04-30T09:24:41.274670+00:00",
+    "updated_at": "2026-04-30T09:24:41.274689+00:00",
+    "visit": {
+      "requested": false,
+      "day": "",
+      "location": "",
+      "time_spoken": "",
+      "time_24h": ""
     }
   }
 ]

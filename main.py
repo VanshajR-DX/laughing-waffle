@@ -29,14 +29,17 @@ in_memory_leads: List[dict] = []
 # Pydantic models for lead operations
 class LeadUpsert(BaseModel):
     name: str = Field(..., min_length=1)
-    phone: str = Field(..., min_length=1)
+    phone: Optional[str] = Field(default=None)
     interest: str = Field(..., min_length=1)
+    caller_id: Optional[str] = Field(default=None, description="Fallback phone if phone not provided")
 
 
 class VisitRequest(BaseModel):
-    phone: str = Field(..., min_length=1)
+    phone: Optional[str] = Field(default=None)
+    caller_id: Optional[str] = Field(default=None, description="Fallback phone if phone not provided")
     day: str = Field(..., min_length=1)
     time: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1, description="Gym location or class name")
 
 
 class LeadDeleteRequest(BaseModel):
@@ -51,6 +54,104 @@ def generate_uuid() -> str:
 def normalize_phone(phone: str) -> str:
     """Strip non-digits from phone number."""
     return "".join(c for c in phone.strip() if c.isdigit())
+
+
+def parse_time_to_minutes(time_str: str) -> int:
+    """
+    Parse time string to minutes since midnight.
+    
+    Accepts formats like:
+    - "6:00 AM", "6:00am", "6am"
+    - "7 PM", "7:30 PM", "7:30pm"
+    - "06:00", "19:00"
+    
+    Returns minutes since midnight (0-1440).
+    Raises HTTPException on invalid format.
+    """
+    import re
+    
+    time_str = time_str.strip().lower()
+    if not time_str:
+        raise HTTPException(status_code=422, detail={"time": "time must be non-empty"})
+    
+    # Normalize: "7pm" -> "7 pm", "7:30pm" -> "7:30 pm"
+    time_str = re.sub(r"([0-9]{1,2}):?([0-9]{0,2})\s*(am|pm)", r"\1:\2 \3", time_str)
+    time_str = time_str.replace("am", "am").replace("pm", "pm")
+    
+    # Try 24-hour format first: "19:00" or "19:30"
+    match_24h = re.match(r"^([0-9]{1,2}):([0-9]{2})$", time_str)
+    if match_24h:
+        hour = int(match_24h.group(1))
+        minute = int(match_24h.group(2))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise HTTPException(status_code=422, detail={"time": "invalid time format"})
+        return hour * 60 + minute
+    
+    # Try 12-hour format: "7 pm", "6:30 am", "7pm", "6:30am"
+    match_12h = re.match(r"^([0-9]{1,2}):?([0-9]{0,2})\s*(am|pm)$", time_str)
+    if match_12h:
+        hour = int(match_12h.group(1))
+        minute = int(match_12h.group(2)) if match_12h.group(2) else 0
+        period = match_12h.group(3)
+        
+        if not (1 <= hour <= 12 and 0 <= minute <= 59):
+            raise HTTPException(status_code=422, detail={"time": "invalid time format"})
+        
+        # Convert to 24-hour
+        if period == "am":
+            if hour == 12:
+                hour = 0
+        else:  # pm
+            if hour != 12:
+                hour += 12
+        
+        return hour * 60 + minute
+    
+    raise HTTPException(status_code=422, detail={"time": "time must be in format like '7 PM', '6:30 AM', or '19:00'"})
+
+
+def is_valid_visit_time(time_str: str) -> bool:
+    """
+    Validate if time falls within allowed gym hours.
+    
+    Allowed range: 5:30 AM (330 mins) to 10:30 PM (1350 mins)
+    
+    Returns True if valid, False otherwise.
+    """
+    try:
+        minutes = parse_time_to_minutes(time_str)
+        # 5:30 AM = 330 mins, 10:30 PM = 1350 mins
+        return 330 <= minutes <= 1350
+    except HTTPException:
+        return False
+
+
+def convert_to_24h(time_str: str) -> str:
+    """
+    Convert time string to 24-hour HH:MM format.
+    
+    Examples:
+    - "7 PM" -> "19:00"
+    - "6:30 AM" -> "06:30"
+    - "09:15" -> "09:15"
+    """
+    minutes = parse_time_to_minutes(time_str)
+    hour = minutes // 60
+    minute = minutes % 60
+    return f"{hour:02d}:{minute:02d}"
+
+
+def get_phone_or_fallback(phone: Optional[str], caller_id: Optional[str]) -> str:
+    """
+    Resolve phone number with caller_id fallback.
+    
+    Returns normalized phone or raises HTTPException.
+    """
+    effective_phone = phone or caller_id
+    if not effective_phone:
+        raise HTTPException(status_code=422, detail={"phone": "phone or caller_id must be provided"})
+    
+    return validate_phone(effective_phone)
 
 
 def validate_phone(phone: str) -> str:
@@ -119,10 +220,19 @@ def _normalize_record(record: dict) -> dict:
     if len(normalized_phone) != 10:
         raise ValueError(f"persisted phone must resolve to 10 digits, got: {normalized_phone}")
     
-    # Handle visit data
+    # Handle visit data with migration to new schema
     visit = record.get("visit")
     if not isinstance(visit, dict):
         visit = {}
+    
+    # Migrate old "time" field to "time_spoken" and add "time_24h"
+    time_spoken = str(visit.get("time_spoken") or visit.get("time", "")).strip()
+    time_24h = str(visit.get("time_24h", "")).strip()
+    if time_spoken and not time_24h:
+        try:
+            time_24h = convert_to_24h(time_spoken)
+        except HTTPException:
+            time_24h = ""
     
     return {
         "lead_id": str(record.get("lead_id") or generate_uuid()),
@@ -135,7 +245,9 @@ def _normalize_record(record: dict) -> dict:
         "visit": {
             "requested": bool(visit.get("requested", False)),
             "day": str(visit.get("day", "")).strip(),
-            "time": str(visit.get("time", "")).strip(),
+            "location": str(visit.get("location", "")).strip(),
+            "time_spoken": time_spoken,
+            "time_24h": time_24h,
         },
     }
 
@@ -218,10 +330,16 @@ def health() -> dict:
 
 @app.post("/lead")
 def capture_or_update_lead(payload: LeadUpsert) -> dict:
-    """Create or update a lead by phone."""
+    """Create or update a lead by phone (with caller_id fallback)."""
+    # Resolve phone with fallback to caller_id
+    phone = get_phone_or_fallback(payload.phone, payload.caller_id)
     name = _require_non_empty(payload.name, "name")
-    phone = validate_phone(payload.phone)
     interest = _require_non_empty(payload.interest, "interest")
+    
+    # Log incoming payload
+    print(f"\n=== LEAD CAPTURE REQUEST ===")
+    print(f"Incoming: phone={payload.phone}, caller_id={payload.caller_id}, name={name}")
+    print(f"Resolved phone: {phone}")
     
     with file_lock:
         existing_lead = find_lead_by_phone(phone)
@@ -239,7 +357,9 @@ def capture_or_update_lead(payload: LeadUpsert) -> dict:
                 "visit": {
                     "requested": False,
                     "day": "",
-                    "time": "",
+                    "location": "",
+                    "time_spoken": "",
+                    "time_24h": "",
                 },
             }
             in_memory_leads.append(lead)
@@ -250,18 +370,24 @@ def capture_or_update_lead(payload: LeadUpsert) -> dict:
             existing_lead["interest"] = interest
             existing_lead["updated_at"] = _now_iso()
             if "visit" not in existing_lead or not isinstance(existing_lead["visit"], dict):
-                existing_lead["visit"] = {"requested": False, "day": "", "time": ""}
+                existing_lead["visit"] = {
+                    "requested": False,
+                    "day": "",
+                    "location": "",
+                    "time_spoken": "",
+                    "time_24h": "",
+                }
             lead = existing_lead
             action = "updated"
         
         safe_write_json()
     
-    print(f"\\n=== LEAD {action.upper()} ===")
+    print(f"Action: {action}")
     print(f"Lead ID: {lead['lead_id']}")
     print(f"Name: {lead['name']}")
     print(f"Phone: {lead['phone']}")
     print(f"Interest: {lead['interest']}")
-    print("====================\\n")
+    print("============================\n")
     
     return {"status": action, "lead": lead}
 
@@ -278,30 +404,74 @@ def get_lead(phone: str) -> dict:
 
 @app.post("/visit")
 def book_visit(payload: VisitRequest) -> dict:
-    """Book a visit for an existing lead."""
-    phone = validate_phone(payload.phone)
+    """Book a visit for an existing lead with location and time validation."""
+    # Resolve phone with fallback to caller_id
+    phone = get_phone_or_fallback(payload.phone, payload.caller_id)
     day = _require_non_empty(payload.day, "day")
-    time_str = validate_visit_time(payload.time)
+    location = _require_non_empty(payload.location, "location")
+    time_str = payload.time.strip()
+    
+    # Log incoming payload
+    print(f"\n=== VISIT BOOKING REQUEST ===")
+    print(f"Incoming: phone={payload.phone}, caller_id={payload.caller_id}")
+    print(f"Resolved phone: {phone}")
+    print(f"Day: {day}, Location: {location}, Time: {time_str}")
+    
+    # Validate time is non-empty
+    if not time_str:
+        raise HTTPException(status_code=422, detail={"error": "time must be non-empty"})
+    
+    # Validate time falls within gym hours
+    if not is_valid_visit_time(time_str):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
+        )
+    
+    # Convert time to 24-hour format
+    time_24h = convert_to_24h(time_str)
+    
+    print(f"Time validation passed. Original: {time_str}, 24h: {time_24h}")
     
     with file_lock:
         lead = find_lead_by_phone(phone)
         if lead is None:
+            print(f"ERROR: Lead not found for phone {phone}")
             raise HTTPException(status_code=404, detail={"error": "lead not found"})
         
         if "visit" not in lead or not isinstance(lead["visit"], dict):
-            lead["visit"] = {"requested": False, "day": "", "time": ""}
+            lead["visit"] = {
+                "requested": False,
+                "day": "",
+                "location": "",
+                "time_spoken": "",
+                "time_24h": "",
+            }
         
         lead["visit"]["requested"] = True
         lead["visit"]["day"] = day
-        lead["visit"]["time"] = time_str
+        lead["visit"]["location"] = location
+        lead["visit"]["time_spoken"] = time_str
+        lead["visit"]["time_24h"] = time_24h
+        lead["visit"]["created_at"] = _now_iso()
         lead["updated_at"] = _now_iso()
         safe_write_json()
     
-    print(f"\\n=== VISIT BOOKED ===")
-    print(f"Lead Phone: {lead['phone']}")
-    print(f"Day: {day}")
-    print(f"Time: {time_str}")
-    print("====================\\n")
+    print(f"Visit booked successfully")
+    print(f"Lead: {lead['name']} ({lead['phone']})")
+    print(f"Visit: {day} at {time_24h} ({time_str}) - {location}")
+    print("================================\n")
+    
+    return {
+        "status": "visit_booked",
+        "lead": lead,
+        "visit_details": {
+            "day": day,
+            "location": location,
+            "time_spoken": time_str,
+            "time_24h": time_24h,
+        }
+    }
     
     return {"status": "visit_booked", "lead": lead}
 
