@@ -427,6 +427,9 @@ async def book_visit(request: Request) -> dict:
 
     # Resolve phone with fallback to caller_id
     phone = get_phone_or_fallback(phone, caller_id)
+    day = _require_non_empty(day, "day")
+    location = _require_non_empty(location, "location")
+    time_str = _require_non_empty(time_str, "time")
     
     # Log incoming payload
     print(f"\n=== VISIT BOOKING REQUEST ===")
@@ -434,18 +437,15 @@ async def book_visit(request: Request) -> dict:
     print(f"Resolved phone: {phone}")
     print(f"Day: {day}, Location: {location}, Time: {time_str}")
 
-    time_24h = ""
-    if time_str:
-        # Validate time only when the caller actually sent one.
-        if not is_valid_visit_time(time_str):
-            raise HTTPException(
-                status_code=422,
-                detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
-            )
+    # Validate time and normalize it.
+    if not is_valid_visit_time(time_str):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "Invalid visit time. Must be between 5:30 AM and 10:30 PM."}
+        )
 
-        # Convert time to 24-hour format
-        time_24h = convert_to_24h(time_str)
-        print(f"Time validation passed. Original: {time_str}, 24h: {time_24h}")
+    time_24h = convert_to_24h(time_str)
+    print(f"Time validation passed. Original: {time_str}, 24h: {time_24h}")
     
     with file_lock:
         lead = find_lead_by_phone(phone)

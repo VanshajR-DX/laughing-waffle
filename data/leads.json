@@ -36,13 +36,12 @@
     "interest": "Personal Training",
     "delete_requested": false,
     "created_at": "2026-04-30T09:24:41.274670+00:00",
-    "updated_at": "2026-04-30T11:29:04.473249+00:00",
+    "updated_at": "2026-04-30T11:33:34.745213+00:00",
     "visit": {
       "requested": true,
       "day": "Thursday",
       "location": "Main Gym",
-      "time": "19:45",
-      "created_at": "2026-04-30T11:29:04.473235+00:00"
+      "time": ""
     }
   }
 ]
