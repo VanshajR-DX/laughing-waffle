@@ -228,14 +228,18 @@ def _normalize_record(record: dict) -> dict:
     if not isinstance(visit, dict):
         visit = {}
     
-    # Migrate old "time" field to "time_spoken" and add "time_24h"
-    time_spoken = str(visit.get("time_spoken") or visit.get("time", "")).strip()
-    time_24h = str(visit.get("time_24h", "")).strip()
-    if time_spoken and not time_24h:
+    # Migrate old visit time fields to a single canonical "time" field.
+    time_value = str(
+        visit.get("time")
+        or visit.get("time_24h")
+        or visit.get("time_spoken")
+        or ""
+    ).strip()
+    if time_value:
         try:
-            time_24h = convert_to_24h(time_spoken)
+            time_value = convert_to_24h(time_value)
         except HTTPException:
-            time_24h = ""
+            time_value = ""
     
     return {
         "lead_id": str(record.get("lead_id") or generate_uuid()),
@@ -249,8 +253,7 @@ def _normalize_record(record: dict) -> dict:
             "requested": bool(visit.get("requested", False)),
             "day": str(visit.get("day", "")).strip(),
             "location": str(visit.get("location", "")).strip(),
-            "time_spoken": time_spoken,
-            "time_24h": time_24h,
+            "time": time_value,
         },
     }
 
@@ -361,8 +364,7 @@ def capture_or_update_lead(payload: LeadUpsert) -> dict:
                     "requested": False,
                     "day": "",
                     "location": "",
-                    "time_spoken": "",
-                    "time_24h": "",
+                    "time": "",
                 },
             }
             in_memory_leads.append(lead)
@@ -377,8 +379,7 @@ def capture_or_update_lead(payload: LeadUpsert) -> dict:
                     "requested": False,
                     "day": "",
                     "location": "",
-                    "time_spoken": "",
-                    "time_24h": "",
+                    "time": "",
                 }
             lead = existing_lead
             action = "updated"
@@ -447,22 +448,20 @@ def book_visit(payload: VisitRequest) -> dict:
                 "requested": False,
                 "day": "",
                 "location": "",
-                "time_spoken": "",
-                "time_24h": "",
+                "time": "",
             }
         
         lead["visit"]["requested"] = True
         lead["visit"]["day"] = day
         lead["visit"]["location"] = location
-        lead["visit"]["time_spoken"] = time_str
-        lead["visit"]["time_24h"] = time_24h
+        lead["visit"]["time"] = time_24h
         lead["visit"]["created_at"] = _now_iso()
         lead["updated_at"] = _now_iso()
         safe_write_json()
     
     print(f"Visit booked successfully")
     print(f"Lead: {lead['name']} ({lead['phone']})")
-    print(f"Visit: {day} at {time_24h} ({time_str}) - {location}")
+    print(f"Visit: {day} at {time_24h} - {location}")
     print("================================\n")
     
     return {
@@ -471,8 +470,7 @@ def book_visit(payload: VisitRequest) -> dict:
         "visit_details": {
             "day": day,
             "location": location,
-            "time_spoken": time_str,
-            "time_24h": time_24h,
+            "time": time_24h,
         }
     }
     

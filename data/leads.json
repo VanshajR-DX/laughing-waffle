@@ -11,8 +11,7 @@
       "requested": true,
       "day": "Saturday",
       "location": "",
-      "time_spoken": "09:30",
-      "time_24h": "09:30"
+      "time": "09:30"
     }
   },
   {
@@ -27,8 +26,7 @@
       "requested": true,
       "day": "Wednesday",
       "location": "Downtown Studio",
-      "time_spoken": "7:30 PM",
-      "time_24h": "19:30",
+      "time": "19:30",
       "created_at": "2026-04-30T09:24:32.082951+00:00"
     }
   },
@@ -44,8 +42,7 @@
       "requested": false,
       "day": "",
       "location": "",
-      "time_spoken": "",
-      "time_24h": ""
+      "time": ""
     }
   }
 ]
