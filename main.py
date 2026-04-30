@@ -155,10 +155,13 @@ def get_phone_or_fallback(phone: Optional[str], caller_id: Optional[str]) -> str
 
 
 def validate_phone(phone: str) -> str:
-    """Validate phone is exactly 10 digits after normalization."""
+    """Validate phone after normalization to digits only."""
     normalized = normalize_phone(phone)
-    if len(normalized) != 10:
-        raise HTTPException(status_code=422, detail={"phone": "phone must be exactly 10 digits"})
+    if not 7 <= len(normalized) <= 15:
+        raise HTTPException(
+            status_code=422,
+            detail={"phone": "phone must contain 7 to 15 digits after normalization"},
+        )
     return normalized
 
 
@@ -217,8 +220,8 @@ def _normalize_record(record: dict) -> dict:
     normalized_phone = normalize_phone(phone_str)
     if len(normalized_phone) == 11 and normalized_phone.startswith("1"):
         normalized_phone = normalized_phone[1:]
-    if len(normalized_phone) != 10:
-        raise ValueError(f"persisted phone must resolve to 10 digits, got: {normalized_phone}")
+    if not 7 <= len(normalized_phone) <= 15:
+        raise ValueError(f"persisted phone must resolve to 7 to 15 digits, got: {normalized_phone}")
     
     # Handle visit data with migration to new schema
     visit = record.get("visit")
