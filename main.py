@@ -349,8 +349,8 @@ def startup() -> None:
 
 @app.get("/")
 def health() -> dict:
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint. Used as the keep-alive target for the cron pinger."""
+    return {"status": "ok", "time": _now_iso()}
 
 
 # ========== LEAD CAPTURE ENDPOINTS ==========
